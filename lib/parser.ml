@@ -141,3 +141,27 @@ let%test _ = parse_fail ":"
 let%test _ = parse_fail ":::"
 let%test _ = parse_fail ""
 let%test _ = parse_fail ":  \t fdsf \n"
+
+(* Parse prerequisites *)
+let prerequisites =
+  empty_symbols *> many (target <* empty_symbols) <* many (end_of_line <|> comment)
+;;
+
+let parser = prerequisites
+let parse_ok = test_ok (Format.pp_print_list (fun _ -> print_string)) parser
+let parse_fail = test_fail (Format.pp_print_list (fun _ -> print_string)) parser
+
+let%test _ = parse_ok "abc\n" [ "abc" ]
+let%test _ = parse_ok "abc" [ "abc" ]
+let%test _ = parse_ok "abc  " [ "abc" ]
+let%test _ = parse_ok "abc \t  " [ "abc" ]
+let%test _ = parse_ok "a \t b c,;dex" [ "a"; "b"; "c,;dex" ]
+let%test _ = parse_ok "abc \t f  f " [ "abc"; "f"; "f" ]
+let%test _ = parse_ok "abc #\t f  f " [ "abc" ]
+let%test _ = parse_ok "abc #\n" [ "abc" ]
+let%test _ = parse_ok "#:f" []
+let%test _ = parse_ok "" []
+let%test _ = parse_ok "  \n" []
+let%test _ = parse_fail ":"
+let%test _ = parse_fail ":fsdf"
+let%test _ = parse_fail "fdsf:::"
