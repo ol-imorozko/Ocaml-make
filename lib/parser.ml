@@ -1,51 +1,43 @@
-(** Copyright 2021-2022, andreyizrailev and contributors *)
+(** Copyright 2021-2022, ol-imorozko and contributors *)
 
 (** SPDX-License-Identifier: LGPL-3.0-or-later *)
 
 open Angstrom
 open Ast
 
-let is_space = function
-  | ' ' | '\t' -> true
+let is_whitespace = function
+  | ' ' -> true
   | _ -> false
 ;;
 
-let spaces_p = skip_while is_space
-let eol_p = char '\n'
-let trim_p p = spaces_p *> p <* spaces_p
-
-let is_digit = function
-  | '0' .. '9' -> true
+let is_tab = function
+  | '\t' -> true
   | _ -> false
 ;;
 
-(* Parse an integer. Ast will handle if its size is ok *)
-let const_p =
-  let sign_p = string "+" <|> string "-" in
-  lift2 ( ^ ) (option "" sign_p) (take_while1 is_digit)
+(* is newline or carriage return character *)
+let is_delim = function
+  | '\n' | '\r' -> true
+  | _ -> false
 ;;
 
-let breg_p =
-  choice
-    [ string "ah"
-    ; string "al"
-    ; string "bh"
-    ; string "bl"
-    ; string "ch"
-    ; string "cl"
-    ; string "dh"
-    ; string "dl"
-    ]
+let is_hash = function
+  | '#' -> true
+  | _ -> false
 ;;
 
-let wreg_p = choice [ string "ax"; string "bx"; string "cx"; string "dx" ]
-let dreg_p = choice [ string "eax"; string "ebx"; string "ecx"; string "edx" ]
-let reg_p = choice [ breg_p; wreg_p; dreg_p ]
-let single_operand_p = choice [ reg_p; const_p ]
-let mnem_one_arg_p = choice [ string "inc"; string "mul" ]
-let command_one_arg_p = trim_p mnem_one_arg_p *> trim_p single_operand_p
+let is_colon = function
+  | ':' -> true
+  | _ -> false
+;;
 
-(* Taken from vs9h *)
+let empty_lines =
+  let some_pred preds el = List.exists (fun fn -> fn el) preds in
+  skip_while (some_pred [ is_whitespace; is_tab; is_delim ])
+;;
+
+(* returns list of exprs.*)
+
 let test_ok, test_fail =
   let ok ppf parser input expected =
     match parse_string ~consume:All parser input with
@@ -54,7 +46,7 @@ let test_ok, test_fail =
       ppf Format.std_formatter res;
       false
     | Error e ->
-      print_string ("Failed to parse \"" ^ input ^ "\"" ^ e);
+      print_string e;
       false
   in
   let fail ppf parser input =
@@ -67,14 +59,33 @@ let test_ok, test_fail =
   ok, fail
 ;;
 
-let ok_string = test_ok (fun _ -> print_string)
-let fail_string = test_fail (fun _ -> print_string)
-let ok_int = test_ok (fun _ -> print_int)
-let fail_int = test_fail (fun _ -> print_int)
+(* Test that tests that empty_lines parser work *)
+let tmp = { targets = "abc", []; prerequisites = []; recipe = [] }
+let expr = char 'k' >>| fun _ -> Rule tmp
+let parser = many1 (empty_lines *> expr)
+let parse_ok = test_ok (Format.pp_print_list pp_expr) parser
+let parse_fail = test_fail (Format.pp_print_list pp_expr) parser
 
-let%test _ = ok_string (trim_p (string "test")) "    test " "test"
-let%test _ = ok_string breg_p "ah" "ah"
-let%test _ = fail_string breg_p "ax"
-let%test _ = ok_int const_p "-143" (-143)
-let%test _ = ok_int const_p "+54" 54
-let%test _ = ok_int const_p "00043" 43
+let%test _ = parse_ok "     k" [ Rule tmp ]
+let%test _ = parse_ok "     k   k" [ Rule tmp; Rule tmp ]
+let%test _ = parse_ok "kk \t \t \n k" [ Rule tmp; Rule tmp; Rule tmp ]
+let%test _ = parse_ok "     k             " [ Rule tmp ]
+let%test _ = parse_ok "     k   \t  \n  k   " [ Rule tmp; Rule tmp ]
+let%test _ = parse_ok "\n\t\t  \tk" [ Rule tmp ]
+let%test _ = parse_ok " \n\n  \n  k" [ Rule tmp ]
+let%test _ = parse_ok "     k   k" [ Rule tmp; Rule tmp ]
+let%test _ = parse_ok "     kk" [ Rule tmp; Rule tmp ]
+let%test _ = parse_ok "     k   k" [ Rule tmp; Rule tmp ]
+let%test _ = parse_fail "     x   f"
+let%test _ = parse_fail " \t \t \n "
+let%test _ = parse_fail ""
+
+(* comment_lines parser work *)
+let comment_lines = char '#' *> skip_while (Fun.negate is_delim) *> skip is_delim
+let parser = many1 (many (empty_lines *> comment_lines) *> expr)
+
+let%test _ = parse_ok " #fdsfs\n    k" [ Rule tmp ]
+let%test _ = parse_ok "  #39139\r   k   k" [ Rule tmp; Rule tmp ]
+let%test _ = parse_fail "    #fodsfjo x   f"
+let%test _ = parse_fail "#fodsfjo\n \t \t \n "
+let%test _ = parse_fail ""

@@ -15,7 +15,7 @@
 (homepage "https://github.com/andreyizrailev/fp2022")
 
 (package
- (name "Asm")
+ (name "Make")
  (synopsis "An interpreter for MAKE")
  (description "An interpreter for MAKE")
  (version 0.1)
