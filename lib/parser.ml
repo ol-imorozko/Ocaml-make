@@ -230,29 +230,16 @@ let%test _ = parse_fail ":  \t fdsf \n"
 (* After targets:prerequisites parsing, recipes are lines __starting with the tab__. *)
 
 (* lines starting with tabs are not empty, these are possible recipes *)
-(* let empty_lines1 = *)
-(*   (char ' ' <|> char '\n') *> skip_while (Fun.negate is_delim) <* many (skip is_delim) *)
-(* ;; *)
 
-let empty_lines =
-  let some_pred preds el = List.exists (fun fn -> fn el) preds in
-  take_while1 (some_pred [ is_whitespace; is_delim ]) *> return ()
-;;
-
-let empty_lines =
-  (many end_of_line *> char ' ' *> skip_while (some_pred [ is_whitespace; is_tab ])
-  <* many end_of_line)
-  *> return ()
-;;
-
-let empty_lines =
+let empty_lines1 =
   let ws_line =
     char ' ' *> take_while1 (some_pred [ is_whitespace; is_tab ]) *> return ()
   in
-  many end_of_line *> option () ws_line <* many end_of_line
+  many end_of_line *> ws_line <* many end_of_line <|> many1 end_of_line *> return ()
 ;;
 
-let skip_empty_lines = many (empty_lines <|> comment)
+let empty_lines = option () empty_lines1
+let skip_empty_lines = many (empty_lines1 <|> comment)
 
 let recipes =
   let single_recipe = take_while (Fun.negate is_delim) in
@@ -267,6 +254,9 @@ let parse_fail = test_fail (Format.pp_print_list (fun _ -> print_string)) parser
 
 let%test _ = parse_ok "\tabc" [ "abc" ]
 let%test _ = parse_ok "\tabc\n" [ "abc" ]
+let%test _ = parse_ok "\t\t\tabc\n" [ "\t\tabc" ]
+let%test _ = parse_ok "\tabc\n  #abcde\n" [ "abc" ]
+let%test _ = parse_ok "\tabc\n#x\n" [ "abc" ]
 let%test _ = parse_ok "\n   \n\t   abc\t\t#abc" [ "   abc\t\t#abc" ]
 let%test _ = parse_ok "\n   \n\t#comment\n" [ "#comment" ]
 let%test _ = parse_ok "#cmnt\n\n\tabc\n" [ "abc" ]
@@ -317,4 +307,72 @@ let%test _ =
   parse_ok
     "a:a \\\n b c\n"
     { targets = "a", []; prerequisites = [ "a"; "b"; "c" ]; recipes = [] }
+;;
+
+let%test _ =
+  parse_ok
+    "a:a \\\n b c\n\tabc\n  \t"
+    { targets = "a", []; prerequisites = [ "a"; "b"; "c" ]; recipes = [ "abc" ] }
+;;
+
+(* Parser that returns list of exprs (not quite ast, but close) *)
+let rule_constructor t p r = Rule { targets = t; prerequisites = p; recipes = r }
+let expr = lift3 rule_constructor targets prerequisites recipes
+let parser = skip_meaningless_lines *> many1 expr
+let parse_ok = test_ok (Format.pp_print_list pp_expr) parser
+let parse_fail = test_fail (Format.pp_print_list pp_expr) parser
+
+let%test _ =
+  parse_ok
+    "a:b\na:b\n"
+    [ Rule { targets = "a", []; prerequisites = [ "b" ]; recipes = [] }
+    ; Rule { targets = "a", []; prerequisites = [ "b" ]; recipes = [] }
+    ]
+;;
+
+let%test _ =
+  parse_ok
+    "a:b\n   \n\n   \n  a:b\n"
+    [ Rule { targets = "a", []; prerequisites = [ "b" ]; recipes = [] }
+    ; Rule { targets = "a", []; prerequisites = [ "b" ]; recipes = [] }
+    ]
+;;
+
+let%test _ =
+  parse_ok
+    {|a:b
+	
+		a|}
+    [ Rule { targets = "a", []; prerequisites = [ "b" ]; recipes = [ ""; "\ta" ] } ]
+;;
+
+let%test _ =
+  parse_ok
+    {|a:b
+	
+		a
+     	c:d|}
+    [ Rule { targets = "a", []; prerequisites = [ "b" ]; recipes = [ ""; "\ta" ] }
+    ; Rule { targets = "c", []; prerequisites = [ "d" ]; recipes = [] }
+    ]
+;;
+
+let%test _ =
+  parse_ok
+    {|   	#make comment
+#comment    		
+			  
+         a   		 : 		b 	   
+#make comment
+     		
+			echo a
+   
+    		
+   		b    	:
+	echo b
+     
+#kek|}
+    [ Rule { targets = "a", []; prerequisites = [ "b" ]; recipes = [ "\t\techo a" ] }
+    ; Rule { targets = "b", []; prerequisites = []; recipes = [ "echo b" ] }
+    ]
 ;;
