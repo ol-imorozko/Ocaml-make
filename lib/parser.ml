@@ -55,16 +55,20 @@ let test_ok, test_fail =
     | Ok res ->
       ppf Format.std_formatter res;
       false
-    | _ -> true
+    | _ ->
+      (* printf "Failed to parse %s: " input; *)
+      (* msg |> Result.get_error |> print_string; *)
+      (* printf "\n"; *)
+      true
   in
   ok, fail
 ;;
 
-let tmp = { targets = "abc", []; prerequisites = []; recipe = [] }
+let tmp = { targets = "abc", []; prerequisites = []; recipes = [] }
 let expr = char 't' >>| fun _ -> Rule tmp
 
 (* skips fully empty lines *)
-let empty_lines =
+let fully_empty_lines =
   let some_pred preds el = List.exists (fun fn -> fn el) preds in
   take_while1 (some_pred [ is_whitespace; is_tab; is_delim ]) *> return ()
 ;;
@@ -73,7 +77,7 @@ let empty_lines =
 let comment = char '#' *> skip_while (Fun.negate is_delim) <* many (skip is_delim)
 
 (* skips fully empty lines or comment lines *)
-let skip_meaningless_lines = many (empty_lines <|> comment)
+let skip_meaningless_lines = many (fully_empty_lines <|> comment)
 let parser = many1 (skip_meaningless_lines *> expr) <* skip_meaningless_lines
 let parse_ok = test_ok (Format.pp_print_list pp_expr) parser
 let parse_fail = test_fail (Format.pp_print_list pp_expr) parser
@@ -111,6 +115,7 @@ let empty_symbols =
 ;;
 
 (* parses targets `<target> [<target[s]>...]:` *)
+(* ban '\' in filenames *)
 let targets = both (target <* empty_symbols) (many (target <* empty_symbols)) <* char ':'
 
 type targets = string * string list [@@deriving show { with_path = false }]
@@ -134,16 +139,15 @@ let%test _ = parse_fail ""
 let%test _ = parse_fail ":  \t fdsf \n"
 
 (* Parse prerequisites (could be multilined) *)
-(* ban '\' in filenames for now *)
 let prerequisites =
   let trim_empty p = empty_symbols *> p <* empty_symbols in
-  let prereq_on_one_line = trim_empty (sep_by empty_symbols target) in
-  let eol = many1 (end_of_line <|> comment) in
+  let eol = many (end_of_line <|> comment) in
+  let prereq_on_one_line = trim_empty (sep_by empty_symbols target) <* eol in
   fix (fun p ->
     lift2
       List.append
-      prereq_on_one_line
-      (eol *> return [] <|> (char '\\' <* empty_symbols *> char '\n') *> p <|> return []))
+      (empty_symbols *> many comment *> prereq_on_one_line)
+      ((char '\\' <* empty_symbols *> char '\n') *> p <|> return []))
 ;;
 
 let parser = prerequisites
@@ -155,14 +159,16 @@ let%test _ = parse_ok "abc" [ "abc" ]
 let%test _ = parse_ok "abc  " [ "abc" ]
 let%test _ = parse_ok "abc \t  " [ "abc" ]
 let%test _ = parse_ok "a \t b c,;dex" [ "a"; "b"; "c,;dex" ]
-let%test _ = parse_ok "abc \t f  f " [ "abc"; "f"; "f" ]
-let%test _ = parse_ok "abc #\t f  f " [ "abc" ]
+let%test _ = parse_ok "abc \t f  f \n" [ "abc"; "f"; "f" ]
+let%test _ = parse_ok "abc #\t f  f \n" [ "abc" ]
 let%test _ = parse_ok "abc #\n" [ "abc" ]
 let%test _ = parse_ok "#:f" []
 let%test _ = parse_ok "" []
 let%test _ = parse_ok "  \n" []
 let%test _ = parse_fail "\na"
 let%test _ = parse_fail "\n\n\n a"
+let%test _ = parse_fail "\n  \n a"
+let%test _ = parse_fail "\n  \n \n\techo abc"
 let%test _ = parse_fail ":"
 let%test _ = parse_fail ":fsdf"
 let%test _ = parse_fail "fdsf:::"
@@ -173,11 +179,15 @@ let%test _ = parse_ok "  \\\n  a\n" [ "a" ]
 let%test _ = parse_ok "a\\\n  \t  \t \n" [ "a" ]
 let%test _ = parse_ok "a\\\n  \t  \t b  " [ "a"; "b" ]
 let%test _ = parse_ok "a  \\\n  b" [ "a"; "b" ]
-let%test _ = parse_ok "a a\\b" [ "a"; "a\\b" ]
 let%test _ = parse_ok "a\\\n" [ "a" ]
-let%test _ = parse_ok "a\\\n\na" [ "a" ]
-let%test _ = parse_ok "a\\\n\n  abc:" [ "a" ]
 let%test _ = parse_ok "a \\\n b c \\\n d e" [ "a"; "b"; "c"; "d"; "e" ]
+let%test _ = parse_ok "a\\\n#b" [ "a" ]
+let%test _ = parse_ok "a\\\n#b\n" [ "a" ]
+let%test _ = parse_ok "a\\\n#b\nc" [ "a"; "c" ]
+let%test _ = parse_ok "a\\\n#b\nc\n" [ "a"; "c" ]
+let%test _ = parse_ok "a \\\n #kek\n c\n" [ "a"; "c" ]
+let%test _ = parse_fail "a\\\n\na"
+let%test _ = parse_fail "a\\\n\n  abc:"
 let%test _ = parse_fail "a\\\n  b:"
 
 (* combine these two to make <target> [<target[s]>...]: [<prerequisite[s]>...] parsing *)
@@ -187,7 +197,124 @@ type rule_wo_recepie =
   }
 [@@deriving show { with_path = false }]
 
-(* let parse_ok = test_ok pp_rule_wo_recepie parser *)
-(* let parse_fail = test_fail pp_rule_wo_recepie parser *)
+let parser = lift2 (fun t p -> { targets = t; prerequisites = p }) targets prerequisites
+let parse_ok = test_ok pp_rule_wo_recepie parser
+let parse_fail = test_fail pp_rule_wo_recepie parser
 
-(* let%test _ = parse_ok "a:b\n" { targets = "a", []; prerequisites = [ "b" ] } *)
+let%test _ = parse_ok "a:b\n" { targets = "a", []; prerequisites = [ "b" ] }
+
+let%test _ =
+  parse_ok "a \tb c: a" { targets = "a", [ "b"; "c" ]; prerequisites = [ "a" ] }
+;;
+
+let%test _ =
+  parse_ok "a:a \\\n #kek\n c\n" { targets = "a", []; prerequisites = [ "a"; "c" ] }
+;;
+
+let%test _ =
+  parse_ok "a:a \\\n b c\n" { targets = "a", []; prerequisites = [ "a"; "b"; "c" ] }
+;;
+
+let%test _ = parse_fail "abc\n:"
+let%test _ = parse_fail "\ta b c d e\n"
+let%test _ = parse_fail "abc#:"
+let%test _ = parse_fail ":#c:"
+let%test _ = parse_fail ":a b c#c:"
+let%test _ = parse_fail ":a \\\n b\n"
+let%test _ = parse_fail ":"
+let%test _ = parse_fail ":::"
+let%test _ = parse_fail ""
+let%test _ = parse_fail ":  \t fdsf \n"
+
+(* Parse recipes *)
+(* After targets:prerequisites parsing, recipes are lines __starting with the tab__. *)
+
+(* lines starting with tabs are not empty, these are possible recipes *)
+(* let empty_lines1 = *)
+(*   (char ' ' <|> char '\n') *> skip_while (Fun.negate is_delim) <* many (skip is_delim) *)
+(* ;; *)
+
+let empty_lines =
+  let some_pred preds el = List.exists (fun fn -> fn el) preds in
+  take_while1 (some_pred [ is_whitespace; is_delim ]) *> return ()
+;;
+
+let empty_lines =
+  (many end_of_line *> char ' ' *> skip_while (some_pred [ is_whitespace; is_tab ])
+  <* many end_of_line)
+  *> return ()
+;;
+
+let empty_lines =
+  let ws_line =
+    char ' ' *> take_while1 (some_pred [ is_whitespace; is_tab ]) *> return ()
+  in
+  many end_of_line *> option () ws_line <* many end_of_line
+;;
+
+let skip_empty_lines = many (empty_lines <|> comment)
+
+let recipes =
+  let single_recipe = take_while (Fun.negate is_delim) in
+  let recipe = char '\t' *> single_recipe in
+  let trim_lines p = skip_empty_lines *> p <* skip_empty_lines in
+  trim_lines (sep_by skip_empty_lines recipe)
+;;
+
+let parser = recipes
+let parse_ok = test_ok (Format.pp_print_list (fun _ -> print_string)) parser
+let parse_fail = test_fail (Format.pp_print_list (fun _ -> print_string)) parser
+
+let%test _ = parse_ok "\tabc" [ "abc" ]
+let%test _ = parse_ok "\tabc\n" [ "abc" ]
+let%test _ = parse_ok "\n   \n\t   abc\t\t#abc" [ "   abc\t\t#abc" ]
+let%test _ = parse_ok "\n   \n\t#comment\n" [ "#comment" ]
+let%test _ = parse_ok "#cmnt\n\n\tabc\n" [ "abc" ]
+let%test _ = parse_ok "\ta\n\tb\n\tc\n  " [ "a"; "b"; "c" ]
+let%test _ = parse_ok "\n\n\n    \n" []
+let%test _ = parse_ok "\n   \t\n\ta" [ "a" ]
+let%test _ = parse_fail "\n#abc\n  not a recipe cause not \t \n"
+
+(* one expr parser *)
+let rule_constructor t p r = { targets = t; prerequisites = p; recipes = r }
+let parser = lift3 rule_constructor targets prerequisites recipes
+let parse_ok = test_ok pp_rule parser
+let parse_fail = test_fail pp_rule parser
+
+let%test _ = parse_ok "a:b\n" { targets = "a", []; prerequisites = [ "b" ]; recipes = [] }
+
+let%test _ =
+  parse_ok
+    "a \tb c: a"
+    { targets = "a", [ "b"; "c" ]; prerequisites = [ "a" ]; recipes = [] }
+;;
+
+let%test _ =
+  parse_ok
+    "a:a \\\n #kek\n c\n"
+    { targets = "a", []; prerequisites = [ "a"; "c" ]; recipes = [] }
+;;
+
+let%test _ =
+  parse_ok
+    "a:a \\\n b c\n"
+    { targets = "a", []; prerequisites = [ "a"; "b"; "c" ]; recipes = [] }
+;;
+
+let%test _ =
+  parse_ok
+    "a:b\n#abc\n\n\trec1\n\trec2"
+    { targets = "a", []; prerequisites = [ "b" ]; recipes = [ "rec1"; "rec2" ] }
+;;
+
+let%test _ =
+  parse_ok
+    "a:a \\\n #kek\n c\n\n   \t"
+    { targets = "a", []; prerequisites = [ "a"; "c" ]; recipes = [] }
+;;
+
+let%test _ =
+  parse_ok
+    "a:a \\\n b c\n"
+    { targets = "a", []; prerequisites = [ "a"; "b"; "c" ]; recipes = [] }
+;;

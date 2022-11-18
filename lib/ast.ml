@@ -10,7 +10,7 @@ open Base
 type rule =
   { targets : string * string list
   ; prerequisites : string list
-  ; recipe : string list
+  ; recipes : string list
   }
 [@@deriving show { with_path = false }]
 
