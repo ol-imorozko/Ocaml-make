@@ -5,7 +5,7 @@
 open Base
 
 (* <target> [<target[s]>...]: [<prerequisite[s]>...]
-    [<recepie[s]>...]
+    [<recipe[s]>...]
  *)
 type rule =
   { targets : string * string list
