@@ -190,6 +190,7 @@ let%test _ = parse_fail ":fsdf"
 let%test _ = parse_fail "fdsf:::"
 (* multiline tests *)
 let%test _ = parse_ok "a\\\nb" [ "a"; "b" ]
+let%test _ = parse_ok " \\\n\ta" [ "a" ]
 let%test _ = parse_ok "  \\  \t \n  a" [ "a" ]
 let%test _ = parse_ok "  \\\n  a" [ "a" ]
 let%test _ = parse_ok "a\\\n  \t  \t " [ "a" ]
